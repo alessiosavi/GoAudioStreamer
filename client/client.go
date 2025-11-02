@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"go-audio-streamer/constants"
 	"io"
 	"log"
 	"net"
@@ -12,15 +13,9 @@ import (
 	"github.com/hraban/opus"
 )
 
-const (
-	sampleRate    = 48000
-	channels      = 1
-	frameSize     = 960 // 20ms at 48kHz
-	app           = opus.AppVoIP
-	bitrate       = 12000
-	maxPacketSize = 4000
-	maxBuffer     = 32
-)
+func init() {
+	log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
+}
 
 func main() {
 	var host, port, password string
@@ -41,7 +36,7 @@ func main() {
 	defer conn.Close()
 
 	passBytes := []byte(password)
-	lenBuf := make([]byte, maxBuffer)
+	lenBuf := make([]byte, constants.MaxBuffer)
 	binary.BigEndian.PutUint32(lenBuf, uint32(len(passBytes)))
 	conn.Write(lenBuf)
 	conn.Write(passBytes)
@@ -61,21 +56,22 @@ func main() {
 	defer portaudio.Terminate()
 
 	// Setup encoder
-	enc, err := opus.NewEncoder(sampleRate, channels, app)
+	enc, err := opus.NewEncoder(constants.SampleRate, constants.Channels, constants.App)
 	if err != nil {
 		log.Fatal("Failed to create encoder:", err)
 	}
-	enc.SetBitrate(bitrate)
+	enc.SetDTX(true)
+	enc.SetBitrate(constants.Bitrate)
 
 	// Setup decoder
-	dec, err := opus.NewDecoder(sampleRate, channels)
+	dec, err := opus.NewDecoder(constants.SampleRate, constants.Channels)
 	if err != nil {
 		log.Fatal("Failed to create decoder:", err)
 	}
 
 	// Input stream (microphone)
-	inputBuffer := make([]int16, frameSize)
-	inStream, err := portaudio.OpenDefaultStream(channels, 0, float64(sampleRate), frameSize, inputBuffer)
+	inputBuffer := make([]int16, constants.FrameSize)
+	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, inputBuffer)
 	if err != nil {
 		log.Fatal("Failed to open input stream:", err)
 	}
@@ -83,8 +79,8 @@ func main() {
 	inStream.Start()
 
 	// Output stream (speakers)
-	outputBuffer := make([]int16, frameSize)
-	outStream, err := portaudio.OpenDefaultStream(0, channels, float64(sampleRate), frameSize, outputBuffer)
+	outputBuffer := make([]int16, constants.FrameSize)
+	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, outputBuffer)
 	if err != nil {
 		log.Fatal("Failed to open output stream:", err)
 	}
@@ -94,25 +90,26 @@ func main() {
 	// Goroutine: Capture mic, encode, send
 	go func() {
 		for {
-			err := inStream.Read()
-			if err != nil {
+			if err := inStream.Read(); err != nil {
 				log.Println("Input read error:", err)
 				return
 			}
 
 			// Allocate buffer for encoded packet
-			packet := make([]byte, maxPacketSize)
+			packet := make([]byte, constants.MaxPacketSize)
 			n, err := enc.Encode(inputBuffer, packet)
 			if err != nil {
 				log.Println("Encode error:", err)
 				continue
 			}
-			if n == 0 {
+			if n <= 20 {
 				continue // Skip empty packets
 			}
+			log.Printf("PACKET SIZE: %d\n", n)
+
 			packet = packet[:n] // Slice to actual encoded size
 
-			lenBuf := make([]byte, maxBuffer)
+			lenBuf := make([]byte, constants.MaxBuffer)
 			binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 			conn.Write(lenBuf)
@@ -122,7 +119,7 @@ func main() {
 
 	// Main loop: Receive mixed audio, decode, play
 	for {
-		lenBuf := make([]byte, maxBuffer)
+		lenBuf := make([]byte, constants.MaxBuffer)
 		_, err := io.ReadFull(conn, lenBuf)
 		if err != nil {
 			log.Println("Receive error:", err)
