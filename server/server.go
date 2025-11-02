@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ const (
 	app           = opus.AppVoIP
 	bitrate       = 12000
 	maxPacketSize = 4000
+	maxBuffer     = 32
 )
 
 var (
@@ -28,9 +30,18 @@ var (
 	pcmChans = make(map[int]chan []int16)
 	mu       sync.Mutex
 	nextID   = 0
+	password = ""
 )
 
 func main() {
+
+	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.Parse()
+
+	if password == "" {
+		log.Fatal("Password required; use -password=<yourpass>")
+	}
+
 	ln, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatal(err)
@@ -76,6 +87,33 @@ func handleClient(conn net.Conn, id int) {
 		conn.Close()
 	}()
 
+	// Read password length
+	lenBuf := make([]byte, maxBuffer)
+	_, err := io.ReadFull(conn, lenBuf)
+	if err != nil {
+		log.Printf("Client %d auth failed: %v", id, err)
+		return
+	}
+	passLen := binary.BigEndian.Uint32(lenBuf)
+
+	// Read password
+	passBuf := make([]byte, passLen)
+	_, err = io.ReadFull(conn, passBuf)
+	if err != nil {
+		log.Printf("Client %d auth failed: %v", id, err)
+		return
+	}
+	receivedPassword := string(passBuf)
+	log.Println(passLen, receivedPassword)
+
+	// FIXME: use hashing like bcrypt
+	if receivedPassword != password {
+		log.Printf("Client %d invalid password", id)
+		return
+	}
+	log.Printf("Client %d authenticated successfully", id)
+
+	// Proceed with decoder setup and loop
 	dec, err := opus.NewDecoder(sampleRate, channels)
 	if err != nil {
 		log.Printf("Failed to create decoder for client %d: %v", id, err)
@@ -83,7 +121,7 @@ func handleClient(conn net.Conn, id int) {
 	}
 
 	for {
-		lenBuf := make([]byte, 4)
+		lenBuf := make([]byte, maxBuffer)
 		_, err := io.ReadFull(conn, lenBuf)
 		if err != nil {
 			log.Printf("Client %d disconnected: %v", id, err)
@@ -155,7 +193,7 @@ func mixer() {
 		}
 		packet = packet[:n] // Slice to actual encoded size
 
-		lenBuf := make([]byte, 4)
+		lenBuf := make([]byte, maxBuffer)
 		binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 		mu.Lock()

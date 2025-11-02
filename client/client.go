@@ -2,11 +2,11 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
 
 	"github.com/gordonklaus/portaudio"
 	"github.com/hraban/opus"
@@ -19,23 +19,32 @@ const (
 	app           = opus.AppVoIP
 	bitrate       = 12000
 	maxPacketSize = 4000
+	maxBuffer     = 32
 )
 
 func main() {
-	var host string
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: go run client.go <server-ip:port>")
-		host = "0.0.0.0:1234"
-		// os.Exit(1)
-	} else {
-		host = os.Args[1]
+	var host, port, password string
+
+	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.StringVar(&host, "host", "0.0.0.0", "Host to connect")
+	flag.StringVar(&port, "port", "1234", "Port to connect")
+	flag.Parse()
+
+	if password == "" {
+		log.Fatal("Password required; use -password=<yourpass>")
 	}
 
-	conn, err := net.Dial("tcp", host)
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", host, port))
 	if err != nil {
 		log.Fatal("Failed to connect:", err)
 	}
 	defer conn.Close()
+
+	passBytes := []byte(password)
+	lenBuf := make([]byte, maxBuffer)
+	binary.BigEndian.PutUint32(lenBuf, uint32(len(passBytes)))
+	conn.Write(lenBuf)
+	conn.Write(passBytes)
 
 	// Receive ID
 	idBuf := make([]byte, 1)
@@ -103,7 +112,7 @@ func main() {
 			}
 			packet = packet[:n] // Slice to actual encoded size
 
-			lenBuf := make([]byte, 4)
+			lenBuf := make([]byte, maxBuffer)
 			binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 			conn.Write(lenBuf)
@@ -113,7 +122,7 @@ func main() {
 
 	// Main loop: Receive mixed audio, decode, play
 	for {
-		lenBuf := make([]byte, 4)
+		lenBuf := make([]byte, maxBuffer)
 		_, err := io.ReadFull(conn, lenBuf)
 		if err != nil {
 			log.Println("Receive error:", err)
