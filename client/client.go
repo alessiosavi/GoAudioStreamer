@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	utils.SetLog(logrus.TraceLevel)
+	utils.SetLog(logrus.DebugLevel)
 }
 
 func main() {
@@ -172,7 +172,6 @@ func main() {
 		if packetLen == 0 {
 			continue // Ignore empty
 		}
-		log.Tracef("Packet len: %d", packetLen)
 
 		packet := make([]byte, packetLen)
 		if _, err = io.ReadFull(conn, packet); err != nil {
