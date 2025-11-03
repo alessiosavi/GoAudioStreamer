@@ -8,15 +8,17 @@ import (
 	"go-audio-streamer/utils"
 	"io"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/gordonklaus/portaudio"
 	"github.com/hraban/opus"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
-	utils.SetLog()
+	utils.SetLog(logrus.TraceLevel)
 }
 
 func main() {
@@ -72,63 +74,105 @@ func main() {
 		log.Fatal("Failed to create decoder:", err)
 	}
 
-	// Input stream (microphone)
-	inputBuffer := make([]int16, constants.FrameSize)
-	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, inputBuffer)
-	if err != nil {
-		log.Fatal("Failed to open input stream:", err)
-	}
-	defer inStream.Close()
+	// Jitter buffer for decoded PCM frames
+	jitterBufferSize := 4 // ~80ms buffer; adjust for network
+	outputQueue := make(chan []int16, jitterBufferSize)
 
-	// Output stream (speakers)
+	// Silence buffer for underruns
+	silenceBuffer := make([]int16, constants.FrameSize)
 	outputBuffer := make([]int16, constants.FrameSize)
-	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, outputBuffer)
-	if err != nil {
-		log.Fatal("Failed to open output stream:", err)
-	}
-	defer outStream.Close()
 
-	inStream.Start()
-	outStream.Start()
+	// Input stream setup with restart logic
+	var inStream *portaudio.Stream
+	inputBuffer := make([]int16, constants.FrameSize)
 
-	// Goroutine: Capture mic, encode, send
+	// Output stream setup with restart logic
+	var outStream *portaudio.Stream
+
+	// Capture goroutine: Mic read, encode, send with auto-restart
 	go func() {
-		for {
-			if err := inStream.Read(); err != nil {
-				log.Error("Input read error:", err)
-				return
+		for { // Outer restart loop
+			inStream = initInputStream(inputBuffer)
+			defer inStream.Close()
+			log.Info("Input stream (re)started")
+
+			for {
+				if err := inStream.Read(); err != nil {
+					if strings.Contains(err.Error(), "Invalid stream pointer") || strings.Contains(err.Error(), "Stream is stopped") || strings.Contains(err.Error(), "Input/output error") {
+						log.Warnf("Recoverable input error: %v; restarting stream", err)
+						// inStream.Close()
+						break // To outer loop
+					}
+					log.Errorf("Fatal input read error: %v", err)
+					return
+				}
+
+				packet := make([]byte, constants.MaxPacketSize)
+				n, err := enc.Encode(inputBuffer, packet)
+				if err != nil {
+					log.Error("Encode error:", err)
+					continue
+				}
+				packet = packet[:n]
+
+				lenBuf := make([]byte, constants.MaxBuffer)
+				binary.BigEndian.PutUint32(lenBuf, uint32(n))
+
+				conn.Write(lenBuf)
+				conn.Write(packet)
 			}
-
-			// Allocate buffer for encoded packet
-			packet := make([]byte, constants.MaxPacketSize)
-			n, err := enc.Encode(inputBuffer, packet)
-			if err != nil {
-				log.Error("Encode error:", err)
-				continue
-			}
-			if n <= 20 {
-				continue // Skip empty packets
-			}
-			log.Debugf("PACKET SIZE: %d", n)
-
-			packet = packet[:n] // Slice to actual encoded size
-
-			lenBuf := make([]byte, constants.MaxBuffer)
-			binary.BigEndian.PutUint32(lenBuf, uint32(n))
-
-			conn.Write(lenBuf)
-			conn.Write(packet)
 		}
 	}()
 
-	// Main loop: Receive mixed audio, decode, play
-	for {
+	// Playback goroutine: Ticks to play from queue or silence
+	go func() {
+		ticker := time.NewTicker((constants.FrameSize / 48) * time.Millisecond)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if outStream == nil {
+				continue // Wait for stream init in main loop
+			}
+
+			var pcm []int16
+			select {
+			case pcm = <-outputQueue:
+			default:
+				pcm = silenceBuffer // Play silence to prevent underrun
+			}
+
+			copy(outputBuffer, pcm)
+
+			if err := outStream.Write(); err != nil { // Assumes buffer is pcm (binding uses last Open arg as buffer)
+				if strings.Contains(err.Error(), "Output underflowed") {
+					log.Warn("Ignoring output underflow")
+					continue
+				}
+				log.Warnf("Playback error: %v; restarting output stream", err)
+				outStream.Close()
+				outStream = nil // Trigger restart
+			}
+		}
+	}()
+
+	// Main loop: Receive, decode, queue; with output restart
+	for { // Outer loop for output restart
+		if outStream == nil {
+			// Use silence initially;
+			outStream = initOutputStream(outputBuffer)
+		}
+
 		lenBuf := make([]byte, constants.MaxBuffer)
 		if _, err := io.ReadFull(conn, lenBuf); err != nil {
 			log.Warn("Receive error:", err)
-			return
+			return // Fatal network
 		}
 		packetLen := binary.BigEndian.Uint32(lenBuf)
+
+		if packetLen == 0 {
+			continue // Ignore empty
+		}
+		log.Tracef("Packet len: %d", packetLen)
 
 		packet := make([]byte, packetLen)
 		if _, err = io.ReadFull(conn, packet); err != nil {
@@ -136,14 +180,49 @@ func main() {
 			return
 		}
 
+		outputBuffer := make([]int16, constants.FrameSize)
 		if _, err = dec.Decode(packet, outputBuffer); err != nil {
 			log.Warn("Decode error:", err)
 			continue
 		}
 
-		if err = outStream.Write(); err != nil {
-			log.Error("Output write error:", err)
-			return
+		// Queue (drop if full to avoid backlog/latency)
+		select {
+		case outputQueue <- outputBuffer:
+		default:
+			log.Debug("Jitter buffer full; dropping frame")
 		}
 	}
+}
+
+func initOutputStream(buffer []int16) *portaudio.Stream {
+	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, buffer)
+	if err != nil {
+		log.Fatalf("Open output error: %v; retrying in 1s", err)
+		// time.Sleep(1 * time.Second)
+	}
+	if err = outStream.Start(); err != nil {
+		outStream.Close()
+		log.Fatalf("Start output error: %v; retrying in 1s", err)
+	}
+	log.Info("Output stream (re)started")
+	return outStream
+}
+
+func initInputStream(buffer []int16) *portaudio.Stream {
+	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, buffer)
+	if err != nil {
+		log.Fatalf("Open input error: %v; retrying in 500 ms", err)
+		// time.Sleep(500 * time.Millisecond)
+
+	}
+
+	if err = inStream.Start(); err != nil {
+		log.Fatalf("Start input error: %v; retrying in 500 ms", err)
+		// time.Sleep(500 * time.Millisecond)
+		// continue
+	}
+	// defer inStream.Close()
+	log.Info("Input stream (re)started")
+	return inStream
 }

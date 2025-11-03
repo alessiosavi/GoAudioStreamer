@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hraban/opus"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -24,7 +25,7 @@ var (
 
 func init() {
 	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
-	utils.SetLog()
+	utils.SetLog(logrus.DebugLevel)
 }
 func main() {
 
@@ -143,7 +144,7 @@ func mixer() {
 	enc.SetDTX(true)
 	enc.SetBitrate(constants.Bitrate)
 
-	ticker := time.NewTicker(20 * time.Millisecond)
+	ticker := time.NewTicker((constants.FrameSize / 48) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
