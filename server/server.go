@@ -2,25 +2,17 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
+	"flag"
+	"go-audio-streamer/constants"
+	"go-audio-streamer/utils"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/hraban/opus"
-)
-
-const (
-	port          = ":1234"
-	maxClients    = 4
-	sampleRate    = 48000
-	channels      = 1
-	frameSize     = 960 // 20ms at 48kHz
-	app           = opus.AppVoIP
-	bitrate       = 12000
-	maxPacketSize = 4000
+	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -28,14 +20,27 @@ var (
 	pcmChans = make(map[int]chan []int16)
 	mu       sync.Mutex
 	nextID   = 0
+	password = ""
 )
 
+func init() {
+	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
+	utils.SetLog(logrus.DebugLevel)
+}
 func main() {
-	ln, err := net.Listen("tcp", port)
+
+	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.Parse()
+
+	if password == "" {
+		log.Fatal("Password required; use -password=<yourpass>")
+	}
+
+	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Server listening on %s\n", port)
+	log.Infof("Server listening on %s", constants.Port)
 
 	// Start mixer goroutine
 	go mixer()
@@ -43,12 +48,13 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Println(err)
+			log.Warnf("Error during accepting client: %s", err.Error())
 			continue
 		}
 
 		mu.Lock()
-		if len(clients) >= maxClients {
+		if len(clients) >= constants.MaxClients {
+			log.Warnf("We already have %d clients, dropping %s", len(clients), conn.RemoteAddr().String())
 			conn.Close()
 			mu.Unlock()
 			continue
@@ -56,7 +62,7 @@ func main() {
 		nextID++
 		id := nextID
 		clients[id] = conn
-		pcmChans[id] = make(chan []int16, 10) // Buffered to handle slight jitter
+		pcmChans[id] = make(chan []int16, 3) // Buffered to handle slight jitter
 		mu.Unlock()
 
 		// Send ID to client
@@ -76,32 +82,53 @@ func handleClient(conn net.Conn, id int) {
 		conn.Close()
 	}()
 
-	dec, err := opus.NewDecoder(sampleRate, channels)
+	// Read password length
+	lenBuf := make([]byte, constants.MaxBuffer)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		log.Errorf("Client %d auth failed: %v", id, err)
+		return
+	}
+	passLen := binary.BigEndian.Uint32(lenBuf)
+
+	// Read password
+	passBuf := make([]byte, passLen)
+
+	if _, err := io.ReadFull(conn, passBuf); err != nil {
+		log.Errorf("Client %d auth failed: %v | Password: %s", id, err, string(passBuf))
+		return
+	}
+	receivedPassword := string(passBuf)
+	// FIXME: use hashing like bcrypt
+	if receivedPassword != password {
+		log.Warnf("Client %d invalid password: <%s>", id, receivedPassword)
+		return
+	}
+	log.Infof("Client %d authenticated successfully", id)
+
+	// Proceed with decoder setup and loop
+	dec, err := opus.NewDecoder(constants.SampleRate, constants.Channels)
 	if err != nil {
-		log.Printf("Failed to create decoder for client %d: %v", id, err)
+		log.Errorf("Failed to create decoder for client %d: %v", id, err)
 		return
 	}
 
 	for {
-		lenBuf := make([]byte, 4)
-		_, err := io.ReadFull(conn, lenBuf)
-		if err != nil {
-			log.Printf("Client %d disconnected: %v", id, err)
+		lenBuf := make([]byte, constants.MaxBuffer)
+		if _, err = io.ReadFull(conn, lenBuf); err != nil {
+			log.Warnf("Client %d disconnected: %v", id, err)
 			return
 		}
 		packetLen := binary.BigEndian.Uint32(lenBuf)
 
 		packet := make([]byte, packetLen)
-		_, err = io.ReadFull(conn, packet)
-		if err != nil {
-			log.Printf("Client %d disconnected: %v", id, err)
+		if _, err = io.ReadFull(conn, packet); err != nil {
+			log.Warnf("Client %d disconnected: %v", id, err)
 			return
 		}
 
-		pcm := make([]int16, frameSize)
-		_, err = dec.Decode(packet, pcm)
-		if err != nil {
-			log.Printf("Decode error for client %d: %v", id, err)
+		pcm := make([]int16, constants.FrameSize)
+		if _, err = dec.Decode(packet, pcm); err != nil {
+			log.Errorf("Decode error for client %d: %v", id, err)
 			continue
 		}
 
@@ -110,22 +137,23 @@ func handleClient(conn net.Conn, id int) {
 }
 
 func mixer() {
-	enc, err := opus.NewEncoder(sampleRate, channels, app)
+	enc, err := opus.NewEncoder(constants.SampleRate, constants.Channels, constants.App)
 	if err != nil {
 		log.Fatal("Failed to create encoder:", err)
 	}
-	enc.SetBitrate(bitrate)
+	enc.SetDTX(true)
+	enc.SetBitrate(constants.Bitrate)
 
-	ticker := time.NewTicker(20 * time.Millisecond)
+	ticker := time.NewTicker((constants.FrameSize / 48) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		mu.Lock()
-		mixed := make([]int16, frameSize)
+		mixed := make([]int16, constants.FrameSize)
 		for _, ch := range pcmChans {
 			select {
 			case pcm := <-ch:
-				for i := 0; i < frameSize; i++ {
+				for i := 0; i < constants.FrameSize; i++ {
 					mixed[i] += pcm[i]
 					if mixed[i] > 32767 {
 						mixed[i] = 32767
@@ -144,10 +172,10 @@ func mixer() {
 		}
 
 		// Allocate buffer for encoded packet
-		packet := make([]byte, maxPacketSize)
+		packet := make([]byte, constants.MaxPacketSize)
 		n, err := enc.Encode(mixed, packet)
 		if err != nil {
-			log.Println("Encode error:", err)
+			log.Error("Encode error:", err)
 			continue
 		}
 		if n == 0 {
@@ -155,7 +183,7 @@ func mixer() {
 		}
 		packet = packet[:n] // Slice to actual encoded size
 
-		lenBuf := make([]byte, 4)
+		lenBuf := make([]byte, constants.MaxBuffer)
 		binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 		mu.Lock()
