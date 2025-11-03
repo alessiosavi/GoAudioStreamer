@@ -7,7 +7,7 @@ A simple, efficient Golang-based client-server application for voice communicati
 
 ### Project Story
 
-This project was born out of necessity during a tough time. The last week of October, I came down with a severe flu — running a fever of 40°C (104°F)—which left me unable to focus on work or studies. To pass the time and stay connected, I turned to playing PC games with my friends. However, my aging PC struggled with third-party apps like ***Discord*** for voice chat; it caused noticeable FPS drops and consumed more bandwidth than necessary, making gameplay laggy and frustrating.
+This project was born out of necessity during a tough time. The last week of October, I came down with a severe flu—running a fever of 40°C (104°F)—which left me unable to focus on work or studies. To pass the time and stay connected, I turned to playing PC games with my friends. However, my aging PC struggled with third-party apps like ***Discord*** for voice chat; it caused noticeable FPS drops and consumed more bandwidth than necessary, making gameplay laggy and frustrating.
 
 Frustrated with these issues, I decided to build a lightweight alternative: a terminal-based voice chat tool optimized for low latency and minimal resources. The goal was to enable seamless talking with 2-4 friends while gaming, without the overhead of bloated applications, reducing bandwidth to essentials and keeping CPU/GPU impact near zero.
 
@@ -68,6 +68,6 @@ cd ..
 
 
 # cd into GoAudioStreamer
-GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig go build -o client.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" client/client.go
-GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig go build -o server.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" server/server.go
+CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/client.exe -pgo pprof/client.pb.gz -tags nolibopusfile -ldflags="-s -w -extldflags=-static" client/client.go
+CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/server.exe -pgo pprof/server.pb.gz  -tags nolibopusfile -ldflags="-s -w -extldflags=-static" server/server.go
 ```

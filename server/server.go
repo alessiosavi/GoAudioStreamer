@@ -3,13 +3,19 @@ package main
 import (
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"go-audio-streamer/constants"
 	"go-audio-streamer/utils"
 	"io"
 	"net"
+	"os"
+	"os/signal"
+	"runtime/pprof"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/alessiosavi/GoGPUtils/helper"
 	"github.com/hraban/opus"
 	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
@@ -28,13 +34,31 @@ func init() {
 	utils.SetLog(logrus.DebugLevel)
 }
 func main() {
-
+	var generateProf bool
 	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.BoolVar(&generateProf, "pprof", true, "Generate optimization file")
+
 	flag.Parse()
 
 	if password == "" {
 		log.Fatal("Password required; use -password=<yourpass>")
 	}
+
+	if generateProf {
+		os.Mkdir("pprof", 0755)
+		f, err := os.Create(fmt.Sprintf("pprof/cpu-server-%s.pprof", helper.InitRandomizer().RandomString(6)))
+		if err != nil {
+
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal(err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+	// Handle signals for clean shutdown
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
@@ -45,6 +69,11 @@ func main() {
 	// Start mixer goroutine
 	go mixer()
 
+	go func() {
+		<-sigs
+		pprof.StopCPUProfile()
+		os.Exit(0)
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
