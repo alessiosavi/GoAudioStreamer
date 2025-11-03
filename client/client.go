@@ -5,16 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"go-audio-streamer/constants"
+	"go-audio-streamer/utils"
 	"io"
-	"log"
 	"net"
 
 	"github.com/gordonklaus/portaudio"
 	"github.com/hraban/opus"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
+	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
+	utils.SetLog()
 }
 
 func main() {
@@ -29,7 +31,9 @@ func main() {
 		log.Fatal("Password required; use -password=<yourpass>")
 	}
 
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", host, port))
+	remoteAddress := fmt.Sprintf("%s:%s", host, port)
+	log.Infof("Connecting to %s using password %s", remoteAddress, password)
+	conn, err := net.Dial("tcp", remoteAddress)
 	if err != nil {
 		log.Fatal("Failed to connect:", err)
 	}
@@ -43,15 +47,14 @@ func main() {
 
 	// Receive ID
 	idBuf := make([]byte, 1)
-	_, err = conn.Read(idBuf)
-	if err != nil {
+	if _, err = conn.Read(idBuf); err != nil {
 		log.Fatal("Failed to receive ID:", err)
 	}
 	id := idBuf[0]
-	fmt.Printf("Connected as client ID %d\n", id)
+	log.Infof("Connected as client ID %d", id)
 
 	if err := portaudio.Initialize(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	defer portaudio.Terminate()
 
@@ -76,7 +79,6 @@ func main() {
 		log.Fatal("Failed to open input stream:", err)
 	}
 	defer inStream.Close()
-	inStream.Start()
 
 	// Output stream (speakers)
 	outputBuffer := make([]int16, constants.FrameSize)
@@ -85,13 +87,15 @@ func main() {
 		log.Fatal("Failed to open output stream:", err)
 	}
 	defer outStream.Close()
+
+	inStream.Start()
 	outStream.Start()
 
 	// Goroutine: Capture mic, encode, send
 	go func() {
 		for {
 			if err := inStream.Read(); err != nil {
-				log.Println("Input read error:", err)
+				log.Error("Input read error:", err)
 				return
 			}
 
@@ -99,13 +103,13 @@ func main() {
 			packet := make([]byte, constants.MaxPacketSize)
 			n, err := enc.Encode(inputBuffer, packet)
 			if err != nil {
-				log.Println("Encode error:", err)
+				log.Error("Encode error:", err)
 				continue
 			}
 			if n <= 20 {
 				continue // Skip empty packets
 			}
-			log.Printf("PACKET SIZE: %d\n", n)
+			log.Debugf("PACKET SIZE: %d", n)
 
 			packet = packet[:n] // Slice to actual encoded size
 
@@ -120,29 +124,25 @@ func main() {
 	// Main loop: Receive mixed audio, decode, play
 	for {
 		lenBuf := make([]byte, constants.MaxBuffer)
-		_, err := io.ReadFull(conn, lenBuf)
-		if err != nil {
-			log.Println("Receive error:", err)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			log.Warn("Receive error:", err)
 			return
 		}
 		packetLen := binary.BigEndian.Uint32(lenBuf)
 
 		packet := make([]byte, packetLen)
-		_, err = io.ReadFull(conn, packet)
-		if err != nil {
-			log.Println("Receive error:", err)
+		if _, err = io.ReadFull(conn, packet); err != nil {
+			log.Warn("Receive error:", err)
 			return
 		}
 
-		_, err = dec.Decode(packet, outputBuffer)
-		if err != nil {
-			log.Println("Decode error:", err)
+		if _, err = dec.Decode(packet, outputBuffer); err != nil {
+			log.Warn("Decode error:", err)
 			continue
 		}
 
-		err = outStream.Write()
-		if err != nil {
-			log.Println("Output write error:", err)
+		if err = outStream.Write(); err != nil {
+			log.Error("Output write error:", err)
 			return
 		}
 	}
