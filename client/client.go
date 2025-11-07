@@ -17,22 +17,22 @@ import (
 
 	"github.com/alessiosavi/GoGPUtils/helper"
 	"github.com/gordonklaus/portaudio"
-	"github.com/hraban/opus"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/hraban/opus.v2"
 )
 
 func init() {
-	utils.SetLog(logrus.TraceLevel)
+	utils.SetLog(log.DebugLevel)
 }
 
 func main() {
 	var host, port, password string
 	var generateProf bool
-	flag.StringVar(&password, "password", "", "Password for authentication")
+
+	flag.StringVar(&password, "password", "test", "Password for authentication")
 	flag.StringVar(&host, "host", "0.0.0.0", "Host to connect")
 	flag.StringVar(&port, "port", "1234", "Port to connect")
-	flag.BoolVar(&generateProf, "pprof", true, "Generate optimization file")
+	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
 
 	flag.Parse()
 
@@ -50,7 +50,6 @@ func main() {
 		if err := pprof.StartCPUProfile(f); err != nil {
 			log.Fatal(err)
 		}
-		// defer pprof.StopCPUProfile()
 	}
 
 	// Handle signals for clean shutdown
@@ -131,6 +130,10 @@ func main() {
 					return
 				}
 
+				if aac := utils.NoiseGateAAC(inputBuffer); aac > constants.AACNoiseGate {
+					copy(inputBuffer, silenceBuffer)
+				}
+
 				packet := make([]byte, constants.MaxPacketSize)
 				n, err := enc.Encode(inputBuffer, packet)
 				if err != nil {
@@ -138,7 +141,6 @@ func main() {
 					continue
 				}
 				packet = packet[:n]
-
 				lenBuf := make([]byte, constants.MaxBuffer)
 				binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
@@ -186,6 +188,7 @@ func main() {
 		inStream.Close()
 		conn.Close()
 		os.Exit(0)
+
 	}()
 
 	// Main loop: Receive, decode, queue; with output restart
