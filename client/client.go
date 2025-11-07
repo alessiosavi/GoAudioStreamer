@@ -8,30 +8,53 @@ import (
 	"go-audio-streamer/utils"
 	"io"
 	"net"
+	"os"
+	"os/signal"
+	"runtime/pprof"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/alessiosavi/GoGPUtils/helper"
 	"github.com/gordonklaus/portaudio"
-	"github.com/hraban/opus"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/hraban/opus.v2"
 )
 
 func init() {
-	utils.SetLog(logrus.DebugLevel)
+	utils.SetLog(log.DebugLevel)
 }
 
 func main() {
 	var host, port, password string
+	var generateProf bool
 
-	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.StringVar(&password, "password", "test", "Password for authentication")
 	flag.StringVar(&host, "host", "0.0.0.0", "Host to connect")
 	flag.StringVar(&port, "port", "1234", "Port to connect")
+	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
+
 	flag.Parse()
 
 	if password == "" {
 		log.Fatal("Password required; use -password=<yourpass>")
 	}
+
+	if generateProf {
+		os.Mkdir("pprof", 0755)
+		f, err := os.Create(fmt.Sprintf("pprof/cpu-client-%s.pprof", helper.InitRandomizer().RandomString(6)))
+		if err != nil {
+
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// Handle signals for clean shutdown
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	remoteAddress := fmt.Sprintf("%s:%s", host, port)
 	log.Infof("Connecting to %s using password %s", remoteAddress, password)
@@ -100,11 +123,15 @@ func main() {
 				if err := inStream.Read(); err != nil {
 					if strings.Contains(err.Error(), "Invalid stream pointer") || strings.Contains(err.Error(), "Stream is stopped") || strings.Contains(err.Error(), "Input/output error") {
 						log.Warnf("Recoverable input error: %v; restarting stream", err)
-						// inStream.Close()
+						inStream.Close()
 						break // To outer loop
 					}
 					log.Errorf("Fatal input read error: %v", err)
 					return
+				}
+
+				if aac := utils.NoiseGateAAC(inputBuffer); aac > constants.AACNoiseGate {
+					copy(inputBuffer, silenceBuffer)
 				}
 
 				packet := make([]byte, constants.MaxPacketSize)
@@ -114,7 +141,6 @@ func main() {
 					continue
 				}
 				packet = packet[:n]
-
 				lenBuf := make([]byte, constants.MaxBuffer)
 				binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
@@ -155,6 +181,16 @@ func main() {
 		}
 	}()
 
+	go func() {
+		<-sigs
+		pprof.StopCPUProfile()
+		outStream.Close()
+		inStream.Close()
+		conn.Close()
+		os.Exit(0)
+
+	}()
+
 	// Main loop: Receive, decode, queue; with output restart
 	for { // Outer loop for output restart
 		if outStream == nil {
@@ -172,6 +208,8 @@ func main() {
 		if packetLen == 0 {
 			continue // Ignore empty
 		}
+
+		log.Tracef("Packet size: %d", packetLen)
 
 		packet := make([]byte, packetLen)
 		if _, err = io.ReadFull(conn, packet); err != nil {
@@ -192,13 +230,13 @@ func main() {
 			log.Debug("Jitter buffer full; dropping frame")
 		}
 	}
+
 }
 
 func initOutputStream(buffer []int16) *portaudio.Stream {
 	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, buffer)
 	if err != nil {
 		log.Fatalf("Open output error: %v; retrying in 1s", err)
-		// time.Sleep(1 * time.Second)
 	}
 	if err = outStream.Start(); err != nil {
 		outStream.Close()
@@ -212,16 +250,12 @@ func initInputStream(buffer []int16) *portaudio.Stream {
 	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, buffer)
 	if err != nil {
 		log.Fatalf("Open input error: %v; retrying in 500 ms", err)
-		// time.Sleep(500 * time.Millisecond)
-
 	}
 
 	if err = inStream.Start(); err != nil {
+		inStream.Close()
 		log.Fatalf("Start input error: %v; retrying in 500 ms", err)
-		// time.Sleep(500 * time.Millisecond)
-		// continue
 	}
-	// defer inStream.Close()
 	log.Info("Input stream (re)started")
 	return inStream
 }
