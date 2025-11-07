@@ -48,26 +48,48 @@ sudo apt install libportaudio2 libportaudiocpp0 libportaudio-ocaml-dev  libopus-
 mkdir $HOME/mingw-libs
 mkdir -p /opt/SP/misc
 cd $_
-wget http://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz && tar -xzf pa_stable_v190700_20210406.tgz && rm pa_stable_v190700_20210406.tgz && cd portaudio
-./configure --host=x86_64-w64-mingw32 --enable-static --disable-shared --prefix=$HOME/mingw-libs
+wget http://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz && tar -xzf pa_stable_v190700_20210406.tgz && rm pa_stable_v190700_20210406.tgz
+wget https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz && tar -xzf libogg-1.3.6.tar.gz && rm libogg-1.3.6.tar.gz
+wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz && tar -xzf opus-1.5.2.tar.gz  && rm  opus-1.5.2.tar.gz
+
+cd portaudio
+sudo make uninstall
+make clean
+./configure --enable-static --disable-shared --prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
 make -j$(nproc)
-make install
+sudo make install
+sudo ldconfig
+sudo /usr/bin/install -c -d /usr/local/include
+for include in portaudio.h pa_linux_alsa.h pa_jack.h; do sudo /usr/bin/install -c -m 644 -m 644 ./include/$include /usr/local/include/$include; done
+sudo /usr/bin/install -c -d /usr/local/lib/pkgconfig
+sudo /usr/bin/install -c -m 644 portaudio-2.0.pc /usr/local/lib/pkgconfig/portaudio-2.0.pc
 cd ..
 
-wget https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz && tar -xzf libogg-1.3.6.tar.gz && rm libogg-1.3.6.tar.gz && cd libogg-1.3.6
-./configure --host=x86_64-w64-mingw32 --enable-static --disable-shared --prefix=$HOME/mingw-libs
+cd libogg-1.3.6
+sudo make uninstall
+make clean
+./configure --enable-static --disable-shared --prefix=$HOME/mingw-libs  --host=x86_64-w64-mingw32
 make -j$(nproc)
-make install
+sudo make install
 cd ..
 
-wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz && tar -xzf opus-1.5.2.tar.gz  && rm  opus-1.5.2.tar.gz  && cd opus-1.5.2
-./configure --host=x86_64-w64-mingw32 --enable-static --disable-shared --with-winapi=wasapi,wmme,directsound --prefix=$HOME/mingw-libs
+cd opus-1.5.2
+sudo make uninstall
+make clean
+./configure --enable-static --disable-shared --with-winapi=wasapi,wmme,directsound --prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
 make -j$(nproc)
-make install
+sudo make install
 cd ..
+
+git clone https://github.com/xiph/rnnoise.git
+cd rnnoise
+./autogen.sh
+./configure CFLAGS='-O3 -march=x86-64' CXXFLAGS='-O3 -march=x86-64' --host=x86_64-w64-mingw32 --enable-static --disable-shared --prefix=$HOME/mingw-libs
+make
+make install
 
 
 # cd into GoAudioStreamer
-CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/client.exe -pgo pprof/client.pb.gz -tags nolibopusfile -ldflags="-s -w -extldflags=-static" client/client.go
-CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/server.exe -pgo pprof/server.pb.gz  -tags nolibopusfile -ldflags="-s -w -extldflags=-static" server/server.go
+CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/client.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" client/client.go
+CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/server.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" server/server.go
 ```

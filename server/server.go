@@ -16,9 +16,8 @@ import (
 	"time"
 
 	"github.com/alessiosavi/GoGPUtils/helper"
-	"github.com/hraban/opus"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/hraban/opus.v2"
 )
 
 var (
@@ -31,12 +30,12 @@ var (
 
 func init() {
 	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
-	utils.SetLog(logrus.DebugLevel)
+	utils.SetLog(log.DebugLevel)
 }
 func main() {
 	var generateProf bool
 	flag.StringVar(&password, "password", "", "Password for authentication")
-	flag.BoolVar(&generateProf, "pprof", true, "Generate optimization file")
+	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
 
 	flag.Parse()
 
@@ -59,7 +58,11 @@ func main() {
 	// Handle signals for clean shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
+	go func() {
+		<-sigs
+		pprof.StopCPUProfile()
+		os.Exit(0)
+	}()
 	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
 		log.Fatal(err)
@@ -69,11 +72,6 @@ func main() {
 	// Start mixer goroutine
 	go mixer()
 
-	go func() {
-		<-sigs
-		pprof.StopCPUProfile()
-		os.Exit(0)
-	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -142,7 +140,7 @@ func handleClient(conn net.Conn, id int) {
 	}
 
 	for {
-		lenBuf := make([]byte, constants.MaxBuffer)
+		lenBuf = make([]byte, constants.MaxBuffer)
 		if _, err = io.ReadFull(conn, lenBuf); err != nil {
 			log.Warnf("Client %d disconnected: %v", id, err)
 			return

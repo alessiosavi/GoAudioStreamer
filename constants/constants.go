@@ -1,9 +1,10 @@
 package constants
 
-import "github.com/hraban/opus"
+import "gopkg.in/hraban/opus.v2"
 
 const (
-	App              = opus.AppRestrictedLowdelay
+	App              = opus.AppVoIP
+	AACNoiseGate     = 80
 	Bitrate          = 12000
 	Channels         = 1
 	FrameSize        = 960 // 20ms at 48kHz
