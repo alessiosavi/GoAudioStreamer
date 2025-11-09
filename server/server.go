@@ -41,10 +41,7 @@ func init() {
 }
 func main() {
 	var generateProf bool
-	var generateProf bool
 	flag.StringVar(&password, "password", "", "Password for authentication")
-	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
-
 	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
 
 	flag.Parse()
@@ -68,7 +65,6 @@ func main() {
 	// Handle signals for clean shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
 	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
 		log.Fatal(err)

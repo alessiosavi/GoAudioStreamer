@@ -23,7 +23,6 @@ import (
 
 func init() {
 	utils.SetLog(log.DebugLevel)
-	utils.SetLog(log.DebugLevel)
 }
 
 func main() {
@@ -31,7 +30,6 @@ func main() {
 	var generateProf bool
 	// var denoiser bool
 
-	flag.StringVar(&password, "password", "test", "Password for authentication")
 	flag.StringVar(&password, "password", "test", "Password for authentication")
 	flag.StringVar(&host, "host", "0.0.0.0", "Host to connect")
 	flag.StringVar(&port, "port", "1234", "Port to connect")
@@ -194,16 +192,6 @@ func main() {
 
 	}()
 
-	go func() {
-		<-sigs
-		pprof.StopCPUProfile()
-		outStream.Close()
-		inStream.Close()
-		conn.Close()
-		os.Exit(0)
-
-	}()
-
 	// Main loop: Receive, decode, queue; with output restart
 	for { // Outer loop for output restart
 		if outStream == nil {
@@ -221,8 +209,6 @@ func main() {
 		if packetLen == 0 {
 			continue // Ignore empty
 		}
-
-		log.Tracef("Packet size: %d", packetLen)
 
 		log.Tracef("Packet size: %d", packetLen)
 
@@ -268,7 +254,6 @@ func initInputStream(buffer *[]int16) *portaudio.Stream {
 	}
 
 	if err = inStream.Start(); err != nil {
-		inStream.Close()
 		inStream.Close()
 		log.Fatalf("Start input error: %v; retrying in 500 ms", err)
 	}

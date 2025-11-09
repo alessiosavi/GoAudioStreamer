@@ -10,9 +10,6 @@ require (
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 	gorgonia.org/gorgonia v0.9.18
 	gorgonia.org/tensor v0.9.24
-	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
-	gorgonia.org/gorgonia v0.9.18
-	gorgonia.org/tensor v0.9.24
 )
 
 require (

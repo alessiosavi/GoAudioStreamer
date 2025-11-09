@@ -17,13 +17,11 @@ func SetLog(level logrus.Level) {
 	Formatter.ForceColors = true
 	logrus.SetReportCaller(true)
 	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
-	logrus.SetReportCaller(true)
-	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
 	logrus.SetFormatter(Formatter)
 	logrus.SetLevel(level)
 }
 
-// noiseGate reduces background noise by zero-ing frequency bins below a threshold.
+// NoiseGateFFT reduces background noise by zero-ing frequency bins below a threshold.
 // It works on a single 20 ms frame (960 samples @48 kHz).
 func NoiseGateFFT(pcm []int16, thresholdDB int) []int16 {
 	// const frameSize = constants.FrameSize // 960
