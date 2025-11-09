@@ -17,6 +17,8 @@ func SetLog(level logrus.Level) {
 	Formatter.ForceColors = true
 	logrus.SetReportCaller(true)
 	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
+	logrus.SetReportCaller(true)
+	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
 	logrus.SetFormatter(Formatter)
 	logrus.SetLevel(level)
 }

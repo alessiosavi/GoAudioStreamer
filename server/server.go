@@ -37,10 +37,14 @@ var (
 func init() {
 	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
 	utils.SetLog(log.DebugLevel)
+	utils.SetLog(log.DebugLevel)
 }
 func main() {
 	var generateProf bool
+	var generateProf bool
 	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
+
 	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
 
 	flag.Parse()

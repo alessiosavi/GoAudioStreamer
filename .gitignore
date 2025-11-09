@@ -9,3 +9,8 @@ pprof/
 *.pprof
 network/converted/
 *.txt
+pprof/
+*.pb.gz
+*.pprof
+network/converted/
+*.txt

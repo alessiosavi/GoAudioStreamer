@@ -8,6 +8,7 @@ A simple, efficient Golang-based client-server application for voice communicati
 ### Project Story
 
 This project was born out of necessity during a tough time. The last week of October, I came down with a severe flu—running a fever of 40°C (104°F)—which left me unable to focus on work or studies. To pass the time and stay connected, I turned to playing PC games with my friends. However, my aging PC struggled with third-party apps like ***Discord*** for voice chat; it caused noticeable FPS drops and consumed more bandwidth than necessary, making gameplay laggy and frustrating.
+This project was born out of necessity during a tough time. The last week of October, I came down with a severe flu—running a fever of 40°C (104°F)—which left me unable to focus on work or studies. To pass the time and stay connected, I turned to playing PC games with my friends. However, my aging PC struggled with third-party apps like ***Discord*** for voice chat; it caused noticeable FPS drops and consumed more bandwidth than necessary, making gameplay laggy and frustrating.
 
 Frustrated with these issues, I decided to build a lightweight alternative: a terminal-based voice chat tool optimized for low latency and minimal resources. The goal was to enable seamless talking with 2-4 friends while gaming, without the overhead of bloated applications, reducing bandwidth to essentials and keeping CPU/GPU impact near zero.
 
@@ -70,6 +71,7 @@ sudo make uninstall
 make clean
 ./configure --enable-static --disable-shared #--prefix=$HOME/mingw-libs  --host=x86_64-w64-mingw32
 make -j$(nproc)
+sudo make install
 sudo make install
 cd ..
 
