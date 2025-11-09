@@ -1,6 +1,8 @@
 package constants
 
-import "gopkg.in/hraban/opus.v2"
+import (
+	"gopkg.in/hraban/opus.v2"
+)
 
 const (
 	App = opus.AppVoIP

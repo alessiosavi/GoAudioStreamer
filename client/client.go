@@ -116,8 +116,6 @@ func main() {
 
 	// Output stream setup with restart logic
 	var outStream *portaudio.Stream
-	// r := rnnoise.NewRNNoise()
-	// log.Printf("FRAME SIZE: %d", rnnoise.GetFrameSize())
 	// Capture goroutine: Mic read, encode, send with auto-restart
 	go func() {
 		packet := make([]byte, constants.MaxPacketSize)
@@ -137,9 +135,6 @@ func main() {
 					log.Errorf("Fatal input read error: %v", err)
 					return
 				}
-				// if aac := utils.NoiseGateAAC(inputBuffer); aac > constants.AACNoiseGate {
-				// 	copy(inputBuffer, silenceBuffer)
-				// }
 				n, err := enc.Encode(inputBuffer, packet)
 				if err != nil {
 					log.Error("Encode error:", err)
@@ -147,10 +142,6 @@ func main() {
 				}
 
 				validPacket := packet[:n]
-				// log.Printf("Before RNN byte: [%d], %+v", len(validPacket), validPacket)
-				// validPacket = r.Process(validPacket)
-				// validPacket = arrayutils.Pad(&validPacket, n, 0)
-				// log.Printf("AFTER RNN byte: [%d], %+v", len(validPacket), validPacket)
 				binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 				conn.Write(lenBuf)

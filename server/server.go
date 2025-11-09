@@ -37,6 +37,7 @@ var (
 func init() {
 	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
 	utils.SetLog(log.DebugLevel)
+	utils.SetLog(log.DebugLevel)
 }
 func main() {
 	var generateProf bool
@@ -64,20 +65,21 @@ func main() {
 	// Handle signals for clean shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigs
-		pprof.StopCPUProfile()
-		for _, client := range clients {
-			client.Close()
-		}
-		os.Exit(0)
-	}()
 	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Infof("Server listening on %s", constants.Port)
 
+	go func() {
+		<-sigs
+		pprof.StopCPUProfile()
+		for _, client := range clients {
+			client.Close()
+		}
+		ln.Close()
+		os.Exit(0)
+	}()
 	// Start mixer goroutine
 	go mixer()
 
