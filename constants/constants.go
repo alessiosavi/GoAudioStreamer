@@ -1,15 +1,17 @@
 package constants
 
-import "gopkg.in/hraban/opus.v2"
+import (
+	"gopkg.in/hraban/opus.v2"
+)
 
 const (
-	App              = opus.AppVoIP
-	AACNoiseGate     = 80
+	App = opus.AppVoIP
+	// AACNoiseGate     = 500
 	Bitrate          = 12000
 	Channels         = 1
 	FrameSize        = 960 // 20ms at 48kHz
-	JitterBufferSize = 4
-	MaxBuffer        = 32
+	JitterBufferSize = 10
+	MaxBuffer        = 64
 	MaxClients       = 4
 	MaxPacketSize    = 4000
 	Port             = ":1234"

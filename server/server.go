@@ -23,6 +23,12 @@ import (
 var (
 	clients  = make(map[int]net.Conn)
 	pcmChans = make(map[int]chan []int16)
+	pcmPool  = sync.Pool{
+		New: func() any {
+			b := make([]int16, constants.MaxPacketSize)
+			return &b
+		},
+	}
 	mu       sync.Mutex
 	nextID   = 0
 	password = ""
@@ -31,10 +37,14 @@ var (
 func init() {
 	// log.SetFlags(log.LstdFlags | log.LUTC | log.Llongfile | log.Lmicroseconds)
 	utils.SetLog(log.DebugLevel)
+	utils.SetLog(log.DebugLevel)
 }
 func main() {
 	var generateProf bool
+	var generateProf bool
 	flag.StringVar(&password, "password", "", "Password for authentication")
+	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
+
 	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
 
 	flag.Parse()
@@ -45,30 +55,35 @@ func main() {
 
 	if generateProf {
 		os.Mkdir("pprof", 0755)
-		f, err := os.Create(fmt.Sprintf("pprof/cpu-server-%s.pprof", helper.InitRandomizer().RandomString(6)))
-		if err != nil {
-
+		if f, err := os.Create(fmt.Sprintf("pprof/cpu-server-%s.pprof", helper.InitRandomizer().RandomString(6))); err == nil {
+			defer f.Close()
+			if err := pprof.StartCPUProfile(f); err != nil {
+				log.Fatal(err)
+			}
+			defer pprof.StopCPUProfile()
+		} else {
+			log.Warning("Unable to create pprof file")
 		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal(err)
-		}
-		defer pprof.StopCPUProfile()
 	}
 	// Handle signals for clean shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigs
-		pprof.StopCPUProfile()
-		os.Exit(0)
-	}()
+
 	ln, err := net.Listen("tcp", constants.Port)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Infof("Server listening on %s", constants.Port)
 
+	go func() {
+		<-sigs
+		pprof.StopCPUProfile()
+		for _, client := range clients {
+			client.Close()
+		}
+		ln.Close()
+		os.Exit(0)
+	}()
 	// Start mixer goroutine
 	go mixer()
 
@@ -89,7 +104,7 @@ func main() {
 		nextID++
 		id := nextID
 		clients[id] = conn
-		pcmChans[id] = make(chan []int16, 3) // Buffered to handle slight jitter
+		pcmChans[id] = make(chan []int16, constants.JitterBufferSize) // Buffered to handle slight jitter
 		mu.Unlock()
 
 		// Send ID to client
@@ -99,7 +114,6 @@ func main() {
 		go handleClient(conn, id)
 	}
 }
-
 func handleClient(conn net.Conn, id int) {
 	defer func() {
 		mu.Lock()
@@ -119,47 +133,91 @@ func handleClient(conn net.Conn, id int) {
 
 	// Read password
 	passBuf := make([]byte, passLen)
-
 	if _, err := io.ReadFull(conn, passBuf); err != nil {
-		log.Errorf("Client %d auth failed: %v | Password: %s", id, err, string(passBuf))
+		// FIXME: Just for debug auth
+		log.Debugf("Client %d auth failed: %v | Password: %s", id, err, string(passBuf))
 		return
 	}
 	receivedPassword := string(passBuf)
-	// FIXME: use hashing like bcrypt
 	if receivedPassword != password {
-		log.Warnf("Client %d invalid password: <%s>", id, receivedPassword)
+		// FIXME: Just for debug auth
+		log.Debugf("Client %d invalid password: <%s>", id, receivedPassword)
 		return
 	}
 	log.Infof("Client %d authenticated successfully", id)
 
-	// Proceed with decoder setup and loop
+	// Setup decoder
 	dec, err := opus.NewDecoder(constants.SampleRate, constants.Channels)
 	if err != nil {
 		log.Errorf("Failed to create decoder for client %d: %v", id, err)
 		return
 	}
 
+	// Create pools
+	var packetPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, constants.MaxPacketSize)
+			return &b
+		},
+	}
+
+	clear(lenBuf)
+
 	for {
-		lenBuf = make([]byte, constants.MaxBuffer)
+		// Read packet length
 		if _, err = io.ReadFull(conn, lenBuf); err != nil {
 			log.Warnf("Client %d disconnected: %v", id, err)
 			return
 		}
 		packetLen := binary.BigEndian.Uint32(lenBuf)
 
-		packet := make([]byte, packetLen)
-		if _, err = io.ReadFull(conn, packet); err != nil {
-			log.Warnf("Client %d disconnected: %v", id, err)
+		// Validate packet length
+		if packetLen > constants.MaxPacketSize {
+			log.Errorf("Client %d sent oversized packet: %d", id, packetLen)
 			return
 		}
 
-		pcm := make([]int16, constants.FrameSize)
-		if _, err = dec.Decode(packet, pcm); err != nil {
-			log.Errorf("Decode error for client %d: %v", id, err)
-			continue
+		// Get buffer from pool
+		packetPtr := packetPool.Get().(*[]byte)
+		packet := *packetPtr
+		if uint32(cap(packet)) < packetLen {
+			packet = make([]byte, packetLen)
+		} else {
+			packet = packet[:packetLen]
 		}
 
-		pcmChans[id] <- pcm
+		// Read audio packet
+		if _, err = io.ReadFull(conn, packet); err != nil {
+			log.Warnf("Client %d disconnected: %v", id, err)
+			packetPool.Put(&packet)
+			return
+		}
+
+		log.Tracef("Read from client <%d> packet: %+v", id, packet)
+
+		// Get PCM buffer from pool and decode
+		pcmPtr := pcmPool.Get().(*[]int16)
+		pcm := *pcmPtr
+		if _, err = dec.Decode(packet, pcm); err != nil {
+			log.Errorf("Decode error for client %d: %v", id, err)
+			pcmPool.Put(&pcm)
+			packetPool.Put(&packet)
+			continue
+		}
+		log.Tracef("Decoded from client <%d> PCM: %+v", id, pcm)
+
+		// Send to mixer (non-blocking)
+		select {
+		case pcmChans[id] <- pcm:
+			log.Tracef("Client <%d> sent PCM to the mixer", id)
+			// Success - pcm ownership transferred to mixer
+		default:
+			// Channel full - drop audio and return buffer to pool
+			pcmPool.Put(&pcm)
+			log.Warnf("Client %d audio dropped - mixer overloaded", id)
+		}
+
+		packetPool.Put(&packet)
 	}
 }
 
@@ -174,49 +232,78 @@ func mixer() {
 	ticker := time.NewTicker((constants.FrameSize / 48) * time.Millisecond)
 	defer ticker.Stop()
 
+	packet := make([]byte, constants.MaxPacketSize)
+	lenBuf := make([]byte, constants.MaxBuffer)
 	for range ticker.C {
-		mu.Lock()
+		// Clear mixed buffer for new mix
 		mixed := make([]int16, constants.FrameSize)
+
+		activeClients := 0
+
+		mu.Lock()
+		// Collect active clients and mix audio
 		for _, ch := range pcmChans {
 			select {
 			case pcm := <-ch:
-				for i := 0; i < constants.FrameSize; i++ {
-					mixed[i] += pcm[i]
-					if mixed[i] > 32767 {
-						mixed[i] = 32767
-					} else if mixed[i] < -32768 {
-						mixed[i] = -32768
+				// clientIDs = append(clientIDs, id)
+				activeClients++
+
+				// Mix audio with clipping protection
+				for i := range mixed {
+					// Convert to int32 to prevent overflow during sum
+					sum := int32(mixed[i]) + int32(pcm[i])
+
+					// Clamp to int16 range
+					if sum > 32767 {
+						sum = 32767
+					} else if sum < -32768 {
+						sum = -32768
 					}
+					mixed[i] = int16(sum)
 				}
+
+				// Return PCM buffer to the GLOBAL pool
+				pcmPool.Put(&mixed) // Use the global pool, not a local one
+
 			default:
-				// No data, treat as silence
+				// No data from this client
 			}
 		}
+		clientCount := len(clients)
 		mu.Unlock()
 
-		if len(clients) < 2 {
-			continue // No need to send if fewer than 2 clients
+		// Skip if no active audio or only one client
+		if activeClients == 0 || clientCount < 2 {
+			continue
 		}
 
-		// Allocate buffer for encoded packet
-		packet := make([]byte, constants.MaxPacketSize)
+		// Encode mixed audio
 		n, err := enc.Encode(mixed, packet)
 		if err != nil {
 			log.Error("Encode error:", err)
 			continue
 		}
 		if n == 0 {
-			continue // Skip empty packets
+			continue // Skip empty packets (DTX)
 		}
-		packet = packet[:n] // Slice to actual encoded size
 
-		lenBuf := make([]byte, constants.MaxBuffer)
+		// Prepare length header
 		binary.BigEndian.PutUint32(lenBuf, uint32(n))
+		validPacket := packet[:n]
 
+		// Broadcast to all clients
 		mu.Lock()
-		for _, conn := range clients {
-			conn.Write(lenBuf)
-			conn.Write(packet)
+		for _, clientConn := range clients {
+			// Write length header
+			if _, err := clientConn.Write(lenBuf); err != nil {
+				log.Warnf("Write error to client: %v", err)
+				continue
+			}
+
+			// Write audio packet
+			if _, err := clientConn.Write(validPacket); err != nil {
+				log.Warnf("Write error to client: %v", err)
+			}
 		}
 		mu.Unlock()
 	}

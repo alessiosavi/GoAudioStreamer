@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/binary"
 	"go-audio-streamer/constants"
 	"math"
 	"slices"
@@ -14,6 +15,8 @@ func SetLog(level logrus.Level) {
 	Formatter.TimestampFormat = "Jan _2 15:04:05.000000000"
 	Formatter.FullTimestamp = true
 	Formatter.ForceColors = true
+	logrus.SetReportCaller(true)
+	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
 	logrus.SetReportCaller(true)
 	// logrus.AddHook(filename.NewHook(level)) // Print filename + line at every log
 	logrus.SetFormatter(Formatter)
@@ -110,4 +113,49 @@ func NoiseGateAAC(arr []int16) float64 {
 
 	aac := float64(sumOfChanges) / float64(len(arr)-1)
 	return aac
+}
+
+func Int16ToBytes(data []int16) []byte {
+	ret := make([]byte, len(data))
+	for i := range data {
+		ret[i] = byte(data[i])
+	}
+
+	return ret
+}
+
+func BytesToInt16(data []byte) []int16 {
+	ret := make([]int16, len(data))
+	for i := range data {
+		ret[i] = int16(data[i])
+	}
+	return ret
+}
+
+func SafeInt16SliceToByteSlice(data []int16) []byte {
+	size := len(data) * 2
+	buffer := make([]byte, size)
+
+	for i, val := range data {
+		// Explicitly write the 2 bytes of the int16 using Big Endian order
+		binary.BigEndian.PutUint16(buffer[i*2:], uint16(val))
+	}
+	return buffer
+}
+
+func SafeByteSliceToInt16Slice(data []byte) []int16 {
+	if len(data)%2 != 0 {
+		// Handle odd length error
+		panic("byte slice length is not even for int16 conversion")
+	}
+
+	size := len(data) / 2
+	result := make([]int16, size)
+
+	for i := 0; i < size; i++ {
+		// Explicitly read 2 bytes using Big Endian order
+		// and store the result in the int16 slice.
+		result[i] = int16(binary.BigEndian.Uint16(data[i*2:]))
+	}
+	return result
 }
