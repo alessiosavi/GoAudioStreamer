@@ -28,11 +28,13 @@ func init() {
 func main() {
 	var host, port, password string
 	var generateProf bool
+	// var denoiser bool
 
 	flag.StringVar(&password, "password", "test", "Password for authentication")
 	flag.StringVar(&host, "host", "0.0.0.0", "Host to connect")
 	flag.StringVar(&port, "port", "1234", "Port to connect")
 	flag.BoolVar(&generateProf, "pprof", false, "Generate optimization file")
+	// flag.BoolVar(&denoiser, "denoiser", false, "Reduce noise using AAC")
 
 	flag.Parse()
 
@@ -43,20 +45,23 @@ func main() {
 	if generateProf {
 		os.Mkdir("pprof", 0755)
 		f, err := os.Create(fmt.Sprintf("pprof/cpu-client-%s.pprof", helper.InitRandomizer().RandomString(6)))
-		if err != nil {
+		if err == nil {
+			defer f.Close()
+			if err := pprof.StartCPUProfile(f); err != nil {
+				log.Warningf("Unable to generate pprof: %s", err)
+			}
 
+		} else {
+			log.Warningf("Unable to generate pprof: %s", err)
 		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal(err)
-		}
+
 	}
 
 	// Handle signals for clean shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	remoteAddress := fmt.Sprintf("%s:%s", host, port)
+	remoteAddress := net.JoinHostPort(host, port)
 	log.Infof("Connecting to %s using password %s", remoteAddress, password)
 	conn, err := net.Dial("tcp", remoteAddress)
 	if err != nil {
@@ -111,11 +116,15 @@ func main() {
 
 	// Output stream setup with restart logic
 	var outStream *portaudio.Stream
-
+	// r := rnnoise.NewRNNoise()
+	// log.Printf("FRAME SIZE: %d", rnnoise.GetFrameSize())
 	// Capture goroutine: Mic read, encode, send with auto-restart
 	go func() {
+		packet := make([]byte, constants.MaxPacketSize)
+		lenBuf := make([]byte, constants.MaxBuffer)
+
 		for { // Outer restart loop
-			inStream = initInputStream(inputBuffer)
+			inStream = initInputStream(&inputBuffer)
 			defer inStream.Close()
 			log.Info("Input stream (re)started")
 
@@ -123,33 +132,34 @@ func main() {
 				if err := inStream.Read(); err != nil {
 					if strings.Contains(err.Error(), "Invalid stream pointer") || strings.Contains(err.Error(), "Stream is stopped") || strings.Contains(err.Error(), "Input/output error") {
 						log.Warnf("Recoverable input error: %v; restarting stream", err)
-						inStream.Close()
-						break // To outer loop
+						break // To outer loop (restarts stream)
 					}
 					log.Errorf("Fatal input read error: %v", err)
 					return
 				}
-
-				if aac := utils.NoiseGateAAC(inputBuffer); aac > constants.AACNoiseGate {
-					copy(inputBuffer, silenceBuffer)
-				}
-
-				packet := make([]byte, constants.MaxPacketSize)
+				// if aac := utils.NoiseGateAAC(inputBuffer); aac > constants.AACNoiseGate {
+				// 	copy(inputBuffer, silenceBuffer)
+				// }
 				n, err := enc.Encode(inputBuffer, packet)
 				if err != nil {
 					log.Error("Encode error:", err)
 					continue
 				}
-				packet = packet[:n]
-				lenBuf := make([]byte, constants.MaxBuffer)
+
+				validPacket := packet[:n]
+				// log.Printf("Before RNN byte: [%d], %+v", len(validPacket), validPacket)
+				// validPacket = r.Process(validPacket)
+				// validPacket = arrayutils.Pad(&validPacket, n, 0)
+				// log.Printf("AFTER RNN byte: [%d], %+v", len(validPacket), validPacket)
 				binary.BigEndian.PutUint32(lenBuf, uint32(n))
 
 				conn.Write(lenBuf)
-				conn.Write(packet)
+				conn.Write(validPacket)
+
+				packet = packet[:constants.MaxPacketSize]
 			}
 		}
 	}()
-
 	// Playback goroutine: Ticks to play from queue or silence
 	go func() {
 		ticker := time.NewTicker((constants.FrameSize / 48) * time.Millisecond)
@@ -195,7 +205,7 @@ func main() {
 	for { // Outer loop for output restart
 		if outStream == nil {
 			// Use silence initially;
-			outStream = initOutputStream(outputBuffer)
+			outStream = initOutputStream(&outputBuffer)
 		}
 
 		lenBuf := make([]byte, constants.MaxBuffer)
@@ -233,7 +243,7 @@ func main() {
 
 }
 
-func initOutputStream(buffer []int16) *portaudio.Stream {
+func initOutputStream(buffer *[]int16) *portaudio.Stream {
 	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, buffer)
 	if err != nil {
 		log.Fatalf("Open output error: %v; retrying in 1s", err)
@@ -246,7 +256,7 @@ func initOutputStream(buffer []int16) *portaudio.Stream {
 	return outStream
 }
 
-func initInputStream(buffer []int16) *portaudio.Stream {
+func initInputStream(buffer *[]int16) *portaudio.Stream {
 	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, buffer)
 	if err != nil {
 		log.Fatalf("Open input error: %v; retrying in 500 ms", err)

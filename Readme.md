@@ -55,7 +55,7 @@ wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz && tar -xzf opus
 cd portaudio
 sudo make uninstall
 make clean
-./configure --enable-static --disable-shared --prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
+./configure --enable-static --disable-shared #--prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
 make -j$(nproc)
 sudo make install
 sudo ldconfig
@@ -68,7 +68,7 @@ cd ..
 cd libogg-1.3.6
 sudo make uninstall
 make clean
-./configure --enable-static --disable-shared --prefix=$HOME/mingw-libs  --host=x86_64-w64-mingw32
+./configure --enable-static --disable-shared #--prefix=$HOME/mingw-libs  --host=x86_64-w64-mingw32
 make -j$(nproc)
 sudo make install
 cd ..
@@ -76,20 +76,26 @@ cd ..
 cd opus-1.5.2
 sudo make uninstall
 make clean
-./configure --enable-static --disable-shared --with-winapi=wasapi,wmme,directsound --prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
+./configure --enable-static --disable-shared #--with-winapi=wasapi,wmme,directsound --prefix=$HOME/mingw-libs --host=x86_64-w64-mingw32 
 make -j$(nproc)
 sudo make install
+sudo ldconfig
 cd ..
 
 git clone https://github.com/xiph/rnnoise.git
+sudo make uninstall
 cd rnnoise
 ./autogen.sh
-./configure CFLAGS='-O3 -march=x86-64' CXXFLAGS='-O3 -march=x86-64' --host=x86_64-w64-mingw32 --enable-static --disable-shared --prefix=$HOME/mingw-libs
-make
-make install
-
-
-# cd into GoAudioStreamer
-CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/client.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" client/client.go
-CGO_CFLAGS="-O3" CGO_CXXFLAGS="-O3" GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ PKG_CONFIG_PATH=$HOME/mingw-libs/lib/pkgconfig  go build -o bin/server.exe -tags nolibopusfile -ldflags="-s -w -extldflags=-static" server/server.go
+./configure  --enable-static --disable-shared #CFLAGS='-O3 -march=x86-64' CXXFLAGS='-O3 -march=x86-64' --host=x86_64-w64-mingw32 --prefix=$HOME/mingw-libs
+make -j$(nproc)
+sudo make install
 ```
+
+### Build
+
+```bash
+bash build.sh linux
+bash build.sh windows
+```
+
+Binaries are in `./bin`
