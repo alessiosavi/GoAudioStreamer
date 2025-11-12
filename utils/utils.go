@@ -4,10 +4,15 @@ import (
 	"encoding/binary"
 	"go-audio-streamer/constants"
 	"math"
+	"os"
+	"runtime/pprof"
 	"slices"
 
 	"github.com/argusdusty/gofft"
+	"github.com/gordonklaus/portaudio"
 	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/exp/constraints"
 )
 
 func SetLog(level logrus.Level) {
@@ -156,4 +161,116 @@ func SafeByteSliceToInt16Slice(data []byte) []int16 {
 		result[i] = int16(binary.BigEndian.Uint16(data[i*2:]))
 	}
 	return result
+}
+
+func InitOutputStream(buffer *[]int16) *portaudio.Stream {
+	outStream, err := portaudio.OpenDefaultStream(0, constants.Channels, float64(constants.SampleRate), constants.FrameSize, buffer)
+	if err != nil {
+		log.Errorf("Open output error: %v", err)
+		return nil
+	}
+	if err = outStream.Start(); err != nil {
+		outStream.Close()
+		log.Errorf("Start output error: %v", err)
+		return nil
+	}
+	log.Info("Output stream (re?)started")
+	return outStream
+}
+
+func InitInputStream(buffer *[]int16) *portaudio.Stream {
+	inStream, err := portaudio.OpenDefaultStream(constants.Channels, 0, float64(constants.SampleRate), constants.FrameSize, buffer)
+	if err != nil {
+		log.Errorf("Open input error: %v", err)
+		return nil
+	}
+
+	if err = inStream.Start(); err != nil {
+		inStream.Close()
+		log.Errorf("Start input error: %v", err)
+		return nil
+	}
+	log.Info("Input stream (re)started")
+	return inStream
+}
+
+type Number interface {
+	constraints.Integer | constraints.Float
+}
+
+// SlidingWindowAvg is a generic struct that calculates a moving average
+// over a fixed window size. It uses an O(1) approach for updates.
+type SlidingWindowAvg[T Number] struct {
+	data    []T     // The array (slice) holding the current window elements
+	maxSize int     // The fixed maximum size of the window
+	sum     float64 // The running total sum of elements in 'data'
+}
+
+// NewSlidingWindowAvg creates and initializes a new SlidingWindowAvg struct.
+func NewSlidingWindowAvg[T Number](size int) *SlidingWindowAvg[T] {
+	return &SlidingWindowAvg[T]{
+		data:    make([]T, 0, size),
+		maxSize: size,
+		sum:     0.0,
+	}
+}
+
+// Push adds a new value to the window and efficiently updates the running sum.
+// If the window is full, it removes the oldest element (pop) before adding the new one.
+// This is the core O(1) optimization.
+func (s *SlidingWindowAvg[T]) Push(item T) {
+	// 1. Convert the generic item to float64 for sum calculation
+	newItemValue := float64(item)
+
+	// Check if the window is full (we reached maxSize)
+	if len(s.data) == s.maxSize {
+		// Window is full, we must remove the oldest element (at index 0)
+		oldestValue := float64(s.data[0])
+
+		// Remove the oldest element's value from the running sum (O(1) subtraction)
+		s.sum -= oldestValue
+
+		// Efficiently remove the oldest element from the slice (pop from front)
+		// This is technically O(N) for slices, but remains the idiomatic way in Go.
+		// For true O(1) pop/push, a circular buffer implementation would be used.
+		s.data = s.data[1:]
+	}
+
+	// 2. Add the new item's value to the running sum (O(1) addition)
+	s.sum += newItemValue
+
+	// 3. Append the new item to the data slice
+	s.data = append(s.data, item)
+
+}
+
+// Avg returns the current average of the elements in the window.
+// It returns 0.0 if the window is empty.
+func (s *SlidingWindowAvg[T]) Avg() float64 {
+	if len(s.data) == 0 {
+		return 0.0
+	}
+	// Calculate the average by dividing the running sum by the current count (O(1) calculation)
+	return s.sum / float64(len(s.data))
+}
+
+func StartCPUProfiling(fname string) func() {
+	f, err := os.Create(fname)
+	if err != nil {
+		log.Fatal("could not create CPU profile: ", err)
+	}
+
+	// 2. Start profiling
+	if err := pprof.StartCPUProfile(f); err != nil {
+		log.Fatal("could not start CPU profile: ", err)
+	}
+	// 3. Return a cleanup function
+	return func() {
+		pprof.StopCPUProfile()
+		f.Sync()
+		if err := f.Close(); err != nil {
+			log.Printf("Profile Warning: error closing CPU profile file %s: %v", fname, err)
+		}
+		log.Printf("CPU profile successfully written to %s", fname)
+	}
 }

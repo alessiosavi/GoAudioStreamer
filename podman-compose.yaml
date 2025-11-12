@@ -1,0 +1,35 @@
+version: '3.7'
+services:
+  # 1. Your Go gRPC Application
+  app:
+    build: . # Build from your Dockerfile
+    image: go-audio-streamer
+    ports:
+      - "50051:50051" # gRPC server port
+      - "9091:9091"   # Prometheus metrics scraping port
+    networks:
+      - monitor-net
+  # 2. Prometheus Service
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    networks:
+      - monitor-net
+
+  # 3. Grafana Service
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - monitor-net
+    depends_on:
+      - prometheus
+
+networks:
+  monitor-net:

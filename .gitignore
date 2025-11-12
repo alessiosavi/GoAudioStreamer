@@ -1,16 +1,12 @@
+*.exe
+*.pb.gz
+*.pprof
+*.txt
+
+.continue/
 .idea/
 .vscode/
-.continue/
 
-bin/*
-*.exe
+bin/
+network/
 pprof/
-*.pb.gz
-*.pprof
-network/converted/
-*.txt
-pprof/
-*.pb.gz
-*.pprof
-network/converted/
-*.txt
