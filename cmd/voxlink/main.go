@@ -4,12 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 
 	"github.com/gordonklaus/portaudio"
+	"go.uber.org/zap"
 
 	"voxlink/internal/sfu"
 	"voxlink/internal/signaling"
@@ -20,19 +20,22 @@ func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	slog.SetDefault(logger)
+	logger, _ := zap.NewDevelopment()
+	defer logger.Sync()
+	sugar := logger.Sugar()
 
 	if err := portaudio.Initialize(); err != nil {
-		logger.Error("portaudio init failed", "err", err)
-		os.Exit(1)
+		sugar.Fatalw("portaudio init failed", "err", err)
 	}
 	defer portaudio.Terminate()
 
 	sfuEngine := sfu.New()
 	defer sfuEngine.Close()
 
-	sigHandler := signaling.NewHandler(sfuEngine)
+	webrtcAPI := sfu.NewWebRTCAPI()
+	peerMgr := sfu.NewPeerManager(webrtcAPI)
+
+	sigHandler := signaling.NewHandler(sfuEngine, logger, signaling.WithPeerManager(peerMgr))
 	webHandler := web.NewHandler(sfuEngine, nil)
 
 	mux := http.NewServeMux()
@@ -45,15 +48,14 @@ func main() {
 	defer stop()
 
 	go func() {
-		logger.Info("VoxLink starting", "addr", *addr)
+		sugar.Infow("VoxLink starting", "addr", *addr)
 		fmt.Fprintf(os.Stderr, "\n  Open http://localhost%s in your browser\n\n", *addr)
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			logger.Error("server error", "err", err)
-			os.Exit(1)
+			sugar.Fatalw("server error", "err", err)
 		}
 	}()
 
 	<-ctx.Done()
-	logger.Info("shutting down...")
+	sugar.Info("shutting down...")
 	server.Shutdown(context.Background())
 }

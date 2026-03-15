@@ -25,7 +25,7 @@ func TestIntegration_FullRoomLifecycle(t *testing.T) {
 	defer sfuEngine.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", signaling.NewHandler(sfuEngine))
+	mux.Handle("/ws", signaling.NewHandler(sfuEngine, nil))
 	mux.Handle("/", web.NewHandler(sfuEngine, nil))
 
 	srv := httptest.NewServer(mux)

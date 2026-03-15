@@ -7,6 +7,10 @@ let myID = '';
 let roomCode = '';
 let muted = false;
 
+// ===== WebRTC State =====
+let pc = null;
+let localStream = null;
+
 // ===== WebSocket =====
 
 function connect(onOpen) {
@@ -44,44 +48,53 @@ function send(type, payload) {
     showError('Not connected to server.');
     return;
   }
-  ws.send(JSON.stringify({ type, ...payload }));
+  ws.send(JSON.stringify({ type, payload }));
 }
 
 // ===== Message Router =====
 
 function handleMessage(msg) {
+  const p = msg.payload || {};
   switch (msg.type) {
     case 'room-created':
-      roomCode = msg.code;
-      myID = msg.peerId;
+      roomCode = p.code;
+      myID = p.peerId;
       showScreen('screen-room');
-      setRoomCode(msg.code);
+      setRoomCode(p.code);
       break;
 
     case 'room-joined':
-      roomCode = msg.code;
-      myID = msg.peerId;
+      roomCode = p.code;
+      myID = p.peerId;
       showScreen('screen-room');
-      setRoomCode(msg.code);
-      if (Array.isArray(msg.peers)) {
-        msg.peers.forEach((p) => addPeer(p.id, p.name, p.muted));
+      setRoomCode(p.code);
+      if (Array.isArray(p.peers)) {
+        p.peers.forEach((peer) => addPeer(peer.id, peer.name, peer.muted));
       }
       break;
 
     case 'peer-joined':
-      addPeer(msg.peerId, msg.name, false);
+      addPeer(p.id, p.name, false);
       break;
 
     case 'peer-left':
-      removePeer(msg.peerId);
+      removePeer(p.id);
       break;
 
     case 'peer-muted':
-      updatePeerMute(msg.peerId, msg.muted);
+      updatePeerMute(p.id, p.muted);
+      break;
+
+    case 'offer':
+      handleOffer(p);
+      break;
+
+    case 'ice-candidate':
+      handleRemoteICECandidate(p);
       break;
 
     case 'error':
-      showError(msg.message || 'An unknown error occurred.');
+      showError(p.message || 'An unknown error occurred.');
       break;
 
     default:
@@ -115,8 +128,9 @@ function joinRoom() {
 }
 
 function leaveRoom() {
+  cleanupWebRTC();
   if (ws) {
-    send('leave-room', {});
+    send('leave', {});
     ws.close();
     ws = null;
   }
@@ -130,14 +144,14 @@ function leaveRoom() {
 
 function toggleMute() {
   muted = !muted;
-  send('set-mute', { muted });
+  send('mute', { muted });
 
-  // Also notify the local audio controller via REST
-  fetch('/api/audio/mute', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ muted }),
-  }).catch(() => {/* best-effort */});
+  // Mute/unmute the local audio track sent over WebRTC.
+  if (localStream) {
+    localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !muted;
+    });
+  }
 
   updatePeerMute(myID, muted);
   const btn = document.getElementById('btn-mute');
@@ -154,6 +168,141 @@ function resetMuteButton() {
   const btn = document.getElementById('btn-mute');
   btn.textContent = 'Mute';
   btn.classList.remove('btn-muted');
+}
+
+// ===== WebRTC =====
+
+const rtcConfig = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+};
+
+/**
+ * Ensure we have a PeerConnection and local microphone stream.
+ * Re-uses the existing pc/localStream if they are still alive.
+ */
+async function ensurePeerConnection() {
+  // Acquire microphone if we haven't yet.
+  if (!localStream) {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      showError('Microphone access denied. Voice will not work.');
+      console.error('getUserMedia error:', err);
+      return;
+    }
+  }
+
+  if (!pc || pc.connectionState === 'closed') {
+    pc = new RTCPeerConnection(rtcConfig);
+
+    // Add local audio track so the SFU can receive our audio.
+    localStream.getAudioTracks().forEach((track) => {
+      pc.addTrack(track, localStream);
+    });
+
+    // Apply current mute state to the track.
+    localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !muted;
+    });
+
+    // Send ICE candidates to the server as they are discovered (trickle ICE).
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        send('ice-candidate', { candidate: event.candidate.candidate });
+      }
+    };
+
+    // When the SFU forwards a remote track to us, play it.
+    pc.ontrack = (event) => {
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      playRemoteStream(stream);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('WebRTC connection state:', pc.connectionState);
+    };
+  }
+}
+
+/**
+ * Handle an SDP offer from the server.
+ * Creates (or re-uses) a PeerConnection, sets the remote description,
+ * creates an answer, and sends it back.
+ */
+async function handleOffer(payload) {
+  try {
+    await ensurePeerConnection();
+    if (!pc) return; // getUserMedia was denied
+
+    const offer = new RTCSessionDescription({ type: 'offer', sdp: payload.sdp });
+    await pc.setRemoteDescription(offer);
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    send('answer', { sdp: answer.sdp });
+  } catch (err) {
+    console.error('handleOffer error:', err);
+    showError('WebRTC negotiation failed.');
+  }
+}
+
+/**
+ * Handle an ICE candidate from the server.
+ */
+async function handleRemoteICECandidate(payload) {
+  if (!pc) return;
+  try {
+    await pc.addIceCandidate(new RTCIceCandidate({ candidate: payload.candidate }));
+  } catch (err) {
+    console.error('addIceCandidate error:', err);
+  }
+}
+
+/**
+ * Play a remote audio stream by creating an <audio> element.
+ * Each stream gets its own element (keyed by stream id to avoid duplicates).
+ */
+function playRemoteStream(stream) {
+  // Avoid duplicate audio elements for the same stream.
+  const containerId = 'remote-audio';
+  let container = document.getElementById(containerId);
+  if (!container) {
+    container = document.createElement('div');
+    container.id = containerId;
+    container.style.display = 'none';
+    document.body.appendChild(container);
+  }
+
+  const existingEl = container.querySelector(
+    `[data-stream-id="${CSS.escape(stream.id)}"]`
+  );
+  if (existingEl) return;
+
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.dataset.streamId = stream.id;
+  audio.srcObject = stream;
+  container.appendChild(audio);
+}
+
+/**
+ * Clean up WebRTC resources (PeerConnection, local stream, remote audio).
+ */
+function cleanupWebRTC() {
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach((track) => track.stop());
+    localStream = null;
+  }
+  // Remove all remote audio elements.
+  const container = document.getElementById('remote-audio');
+  if (container) {
+    container.remove();
+  }
 }
 
 // ===== Peer List DOM (safe — no innerHTML with user data) =====

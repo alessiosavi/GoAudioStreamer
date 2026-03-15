@@ -17,7 +17,7 @@ func TestServer_CreateRoom(t *testing.T) {
 	s := sfu.New()
 	defer s.Close()
 
-	srv := httptest.NewServer(NewHandler(s))
+	srv := httptest.NewServer(NewHandler(s, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -58,7 +58,7 @@ func TestServer_JoinRoom(t *testing.T) {
 	s := sfu.New()
 	defer s.Close()
 
-	srv := httptest.NewServer(NewHandler(s))
+	srv := httptest.NewServer(NewHandler(s, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -107,7 +107,7 @@ func TestServer_JoinNonexistentRoom(t *testing.T) {
 	s := sfu.New()
 	defer s.Close()
 
-	srv := httptest.NewServer(NewHandler(s))
+	srv := httptest.NewServer(NewHandler(s, nil))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

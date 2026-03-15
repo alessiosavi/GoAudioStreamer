@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -19,9 +21,10 @@ type Subscription struct {
 // WebRTCPeer extends Peer with WebRTC connection state.
 type WebRTCPeer struct {
 	*Peer
-	PC   *webrtc.PeerConnection
-	Subs map[string]*Subscription // source peerID -> subscription
-	mu   sync.Mutex
+	PC                *webrtc.PeerConnection
+	Subs              map[string]*Subscription // source peerID -> subscription
+	PendingCandidates []webrtc.ICECandidateInit
+	Mu                sync.Mutex
 }
 
 // PeerManager handles WebRTC PeerConnection creation and track forwarding.
@@ -38,7 +41,11 @@ func NewPeerManager(api *webrtc.API) *PeerManager {
 // CreatePeerConnection creates a new PeerConnection and generates an SDP offer.
 // The SFU acts as the offerer; the client will answer.
 func (pm *PeerManager) CreatePeerConnection() (*webrtc.PeerConnection, webrtc.SessionDescription, error) {
-	pc, err := pm.api.NewPeerConnection(webrtc.Configuration{})
+	pc, err := pm.api.NewPeerConnection(webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{URLs: []string{"stun:stun.l.google.com:19302"}},
+		},
+	})
 	if err != nil {
 		return nil, webrtc.SessionDescription{}, fmt.Errorf("new peer connection: %w", err)
 	}
@@ -88,21 +95,44 @@ func (pm *PeerManager) SubscribeToTrack(
 	ctx, cancel := context.WithCancel(ctx)
 	sub := &Subscription{Track: localTrack, Cancel: cancel}
 
-	// Forward RTP packets in a goroutine.
+	// Forward RTP packets in a goroutine with periodic logging.
 	go func() {
+		var count atomic.Int64
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					n := count.Load()
+					if n > 0 {
+						pm.logger.Info("RTP forwarding",
+							slog.String("track", remoteTrack.ID()),
+							slog.Int64("packets_total", n),
+						)
+					}
+				}
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
+				pm.logger.Info("RTP forwarding stopped", slog.String("track", remoteTrack.ID()))
 				return
 			default:
 			}
 			pkt, _, err := remoteTrack.ReadRTP()
 			if err != nil {
+				pm.logger.Info("RTP read ended", slog.String("track", remoteTrack.ID()), slog.String("err", err.Error()))
 				return
 			}
 			if err := localTrack.WriteRTP(pkt); err != nil {
+				pm.logger.Info("RTP write ended", slog.String("track", remoteTrack.ID()), slog.String("err", err.Error()))
 				return
 			}
+			count.Add(1)
 		}
 	}()
 
