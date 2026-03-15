@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoxLink</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Lobby screen -->
+  <div id="screen-lobby" class="screen active">
+    <div class="card">
+      <h1 class="logo">VoxLink</h1>
+      <p class="tagline">Crystal-clear voice, zero friction.</p>
+
+      <div class="field">
+        <label for="input-name">Your name</label>
+        <input id="input-name" type="text" placeholder="Enter your name" autocomplete="off" maxlength="32" />
+      </div>
+
+      <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
+
+      <div class="divider"><span>or join existing</span></div>
+
+      <div class="field field-row">
+        <input id="input-code" type="text" placeholder="Room code" autocomplete="off" maxlength="12" />
+        <button id="btn-join" class="btn btn-secondary">Join</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Room screen -->
+  <div id="screen-room" class="screen">
+    <div class="card">
+      <div class="room-header">
+        <div class="room-code-wrap">
+          <span class="room-label">Room</span>
+          <span id="display-code" class="room-code"></span>
+          <button id="btn-copy" class="btn btn-icon" title="Copy code">&#x2398;</button>
+        </div>
+        <button id="btn-leave" class="btn btn-danger">Leave</button>
+      </div>
+
+      <ul id="peer-list" class="peer-list"></ul>
+
+      <div class="controls">
+        <button id="btn-mute" class="btn btn-primary">Mute</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error overlay -->
+  <div id="error-overlay" class="error-overlay hidden">
+    <div class="error-box">
+      <p id="error-msg" class="error-msg"></p>
+      <button id="btn-dismiss" class="btn btn-secondary">Dismiss</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
